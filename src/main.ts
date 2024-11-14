@@ -29,6 +29,104 @@ const map = leaflet.map(document.getElementById("map")!, {
   scrollWheelZoom: true,
 });
 
+interface Cell {
+  readonly i: number;
+  readonly j: number;
+}
+
+interface Coin {
+  readonly i: number;
+  readonly j: number;
+  serial: number;
+}
+
+// Convert a lat/lng coordinate to a cell number
+function latLngToCell(latlng: leaflet.LatLng): Cell {
+  return {
+    i: Math.round((latlng.lat) / TILE_DEGREES),
+    j: Math.round((latlng.lng) / TILE_DEGREES),
+  };
+}
+function coordinatesToCell(lat: number, lng: number): Cell {
+  return {
+    i: Math.round(lat / TILE_DEGREES),
+    j: Math.round(lng / TILE_DEGREES),
+  };
+}
+
+export class Board {
+  readonly tileWidth: number;
+  readonly tileVisibilityRadius: number;
+
+  private knownCells: Map<string, Cell> = new Map();
+
+  constructor(tileWidthConstr: number, tileVisibilityRadiusConstr: number) {
+    this.tileWidth = tileWidthConstr;
+    this.tileVisibilityRadius = tileVisibilityRadiusConstr;
+  }
+
+  addKnownCell(cell: Cell) {
+    const { i, j } = cell;
+    const key = [i, j].toString();
+    this.knownCells.set(key, cell);
+    console.log("Added cell:" + cell["i"] + "," + cell["j"]);
+  }
+
+  private getCanonicalCell(cell: Cell): Cell {
+    const { i, j } = cell;
+    const key = [i, j].toString();
+    //not sure if this is correct
+    if (!this.knownCells.has(key)) {
+      this.addKnownCell(cell);
+    }
+    return this.knownCells.get(key)!;
+  }
+
+  getCellForPoint(point: leaflet.LatLng): Cell {
+    return this.getCanonicalCell(latLngToCell(point));
+  }
+
+  getCellBounds(cell: Cell): leaflet.LatLngBounds {
+    const { i, j } = cell;
+    return leaflet.latLngBounds([
+      [
+        OAKES_CLASSROOM.lat + i * this.tileWidth,
+        OAKES_CLASSROOM.lng + j * this.tileWidth,
+      ],
+      [
+        OAKES_CLASSROOM.lat + (i + 1) * this.tileWidth,
+        OAKES_CLASSROOM.lng + (j + 1) * this.tileWidth,
+      ],
+    ]);
+  }
+
+  getCellsNearPoint(point: leaflet.LatLng): Cell[] {
+    const resultCells: Cell[] = [];
+    const originCell = this.getCellForPoint(point);
+    for (
+      let i = -this.tileVisibilityRadius;
+      i <= this.tileVisibilityRadius;
+      i++
+    ) {
+      for (
+        let j = -this.tileVisibilityRadius;
+        j <= this.tileVisibilityRadius;
+        j++
+      ) {
+        const cell = { i: originCell.i + i, j: originCell.j + j };
+        const bounds = this.getCellBounds(cell);
+        if (map.getBounds().intersects(bounds)) {
+          resultCells.push(cell);
+        }
+      }
+    }
+    return resultCells;
+  }
+}
+
+// Create a board object
+const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
+
 // Populate the map with a background tile layer
 leaflet
   .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -68,11 +166,12 @@ updatePlayerPoints();
 
 function spawnCache(i: number, j: number) {
   // Convert cell numbers into lat/lng bounds
-  const origin = OAKES_CLASSROOM;
   const bounds = leaflet.latLngBounds([
-    [origin.lat + i * TILE_DEGREES, origin.lng + j * TILE_DEGREES],
-    [origin.lat + (i + 1) * TILE_DEGREES, origin.lng + (j + 1) * TILE_DEGREES],
+    [i, j],
+    [i + 1 * TILE_DEGREES, j + 1 * TILE_DEGREES],
   ]);
+
+  board.addKnownCell(coordinatesToCell(i, j));
 
   // Add a rectangle to the map to represent the cache
   const rect = leaflet.rectangle(bounds);
@@ -80,6 +179,7 @@ function spawnCache(i: number, j: number) {
   rect.addTo(map);
 
   let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
+  //For every point value we will create a coin object
 
   function updateRectWeight(number: number) {
     let weightMultiplier = 1;
@@ -142,10 +242,17 @@ function spawnCache(i: number, j: number) {
 }
 
 function beginCacheGeneration() {
-  for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
-    for (let j = -NEIGHBORHOOD_SIZE; j < NEIGHBORHOOD_SIZE; j++) {
-      if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-        spawnCache(i, j);
+  const bounds = map.getBounds();
+  const southWest = bounds.getSouthWest();
+  const northEast = bounds.getNorthEast();
+  console.log(bounds);
+  console.log(southWest);
+  console.log(northEast);
+
+  for (let lat = southWest.lat; lat <= northEast.lat; lat += TILE_DEGREES) {
+    for (let lng = southWest.lng; lng <= northEast.lng; lng += TILE_DEGREES) {
+      if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
+        spawnCache(lat, lng);
       }
     }
   }
