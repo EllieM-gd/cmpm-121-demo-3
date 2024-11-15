@@ -130,6 +130,48 @@ export class Board {
 // Create a board object
 const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
 
+interface Momento<T> {
+  toMomento(): T;
+  fromMomento(momento: T): void;
+}
+
+class Geocache implements Momento<string> {
+  i: number;
+  j: number;
+  numCoins: number;
+  localCoins: Coin[] = [];
+  constructor(I: number, J: number, numCoins: number) {
+    this.i = I;
+    this.j = J;
+    this.numCoins = numCoins;
+  }
+  toMomento() {
+    return this.numCoins.toString();
+  }
+
+  fromMomento(momento: string) {
+    this.numCoins = parseInt(momento);
+  }
+  addCoin(Coin: Coin) {
+    this.numCoins++;
+    this.localCoins.push(Coin);
+  }
+  popCoin(): Coin {
+    if (this.localCoins.length > 0) {
+      this.numCoins--;
+      return this.localCoins.pop()!;
+    }
+    throw new Error("No coins left to pop");
+  }
+  //Used for testing mostly
+  getTopCoin(): Coin {
+    if (this.localCoins.length > 0) {
+      return this.localCoins[this.localCoins.length - 1];
+    }
+    throw new Error("No coins left to pop");
+  }
+}
+
 // Populate the map with a background tile layer
 leaflet
   .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -153,10 +195,10 @@ function createNavigationButton(element: string, offset: [number, number]) {
   }
 }
 //Create navigation buttons
-createNavigationButton("north", [0, -100]);
-createNavigationButton("south", [0, 100]);
-createNavigationButton("west", [-100, 0]);
-createNavigationButton("east", [100, 0]);
+createNavigationButton("north", [0, -50]);
+createNavigationButton("south", [0, 50]);
+createNavigationButton("west", [-50, 0]);
+createNavigationButton("east", [50, 0]);
 
 // Display the player's points
 let playerPoints = 0;
@@ -177,18 +219,19 @@ function spawnCache(i: number, j: number) {
   board.addKnownCell(coordinatesToCell(i, j));
   const cellRefernce: Cell = board.getCellForPoint(bounds.getCenter());
 
+  let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
+
+  const cache = new Geocache(cellRefernce.i, cellRefernce.j, pointValue);
+
+  //For every point value we will create a coin object and add it to the cache
+  for (let k = 0; k < pointValue; k++) {
+    cache.addCoin({ i: cellRefernce.i, j: cellRefernce.j, serial: k });
+  }
+
   // Add a rectangle to the map to represent the cache
   const rect = leaflet.rectangle(bounds);
   rect.setStyle({ color: "#ebff35", weight: 1 });
   rect.addTo(map);
-
-  let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
-  //Create local array of coins
-  const coins: Coin[] = [];
-  //For every point value we will create a coin object
-  for (let k = 0; k < pointValue; k++) {
-    coins.push({ i: cellRefernce.i, j: cellRefernce.j, serial: k });
-  }
 
   function updateRectWeight(number: number) {
     let weightMultiplier = 1;
@@ -212,7 +255,6 @@ function spawnCache(i: number, j: number) {
     // Style the buttons
     const pokeButton = localPopupDiv.querySelector<HTMLButtonElement>("#poke")!;
     if (pokeButton !== null) pokeButton.style.backgroundColor = "#22ca7c";
-
     const depositButton = localPopupDiv.querySelector<HTMLButtonElement>(
       "#deposit",
     )!;
@@ -229,7 +271,7 @@ function spawnCache(i: number, j: number) {
       .querySelector<HTMLButtonElement>("#poke")!
       .addEventListener("click", () => {
         if (pointValue > 0) {
-          inventory.push(coins.pop()!);
+          inventory.push(cache.popCoin());
           console.log(
             "Collected: ",
             inventory[inventory.length - 1].i,
@@ -247,13 +289,13 @@ function spawnCache(i: number, j: number) {
     localPopupDiv.querySelector<HTMLButtonElement>("#deposit")!
       .addEventListener("click", () => {
         if (playerPoints > 0 && inventory.length > 0) {
-          coins.push(inventory.pop()!);
+          cache.addCoin(inventory.pop()!);
           console.log(
             "Deposited: ",
-            coins[coins.length - 1].i,
-            coins[coins.length - 1].j,
+            cache.getTopCoin().i,
+            cache.getTopCoin().j,
             "#",
-            coins[coins.length - 1].serial,
+            cache.getTopCoin().serial,
           );
           pointValue += 1;
           playerPoints -= 1;
@@ -264,6 +306,22 @@ function spawnCache(i: number, j: number) {
       });
     return localPopupDiv;
   });
+}
+
+//Regenerate the cache so that it only displays caches that are within the screen
+//TODO: Add a check to see if the cache is already on the map
+function _regerateCache() {
+  const bounds = map.getBounds();
+  const southWest = bounds.getSouthWest();
+  const northEast = bounds.getNorthEast();
+
+  for (let lat = southWest.lat; lat <= northEast.lat; lat += TILE_DEGREES) {
+    for (let lng = southWest.lng; lng <= northEast.lng; lng += TILE_DEGREES) {
+      if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
+        spawnCache(lat, lng);
+      }
+    }
+  }
 }
 
 function beginCacheGeneration() {
