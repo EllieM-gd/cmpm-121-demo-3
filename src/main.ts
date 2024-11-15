@@ -40,6 +40,9 @@ interface Coin {
   serial: number;
 }
 
+//Create an inventory for the player
+const inventory: Coin[] = [];
+
 // Convert a lat/lng coordinate to a cell number
 function latLngToCell(latlng: leaflet.LatLng): Cell {
   return {
@@ -69,7 +72,6 @@ export class Board {
     const { i, j } = cell;
     const key = [i, j].toString();
     this.knownCells.set(key, cell);
-    console.log("Added cell:" + cell["i"] + "," + cell["j"]);
   }
 
   private getCanonicalCell(cell: Cell): Cell {
@@ -103,6 +105,7 @@ export class Board {
   getCellsNearPoint(point: leaflet.LatLng): Cell[] {
     const resultCells: Cell[] = [];
     const originCell = this.getCellForPoint(point);
+    //Prob Broken
     for (
       let i = -this.tileVisibilityRadius;
       i <= this.tileVisibilityRadius;
@@ -172,6 +175,7 @@ function spawnCache(i: number, j: number) {
   ]);
 
   board.addKnownCell(coordinatesToCell(i, j));
+  const cellRefernce: Cell = board.getCellForPoint(bounds.getCenter());
 
   // Add a rectangle to the map to represent the cache
   const rect = leaflet.rectangle(bounds);
@@ -179,7 +183,12 @@ function spawnCache(i: number, j: number) {
   rect.addTo(map);
 
   let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
+  //Create local array of coins
+  const coins: Coin[] = [];
   //For every point value we will create a coin object
+  for (let k = 0; k < pointValue; k++) {
+    coins.push({ i: cellRefernce.i, j: cellRefernce.j, serial: k });
+  }
 
   function updateRectWeight(number: number) {
     let weightMultiplier = 1;
@@ -197,7 +206,7 @@ function spawnCache(i: number, j: number) {
     const localPopupDiv = document.createElement("div");
     //Display text and create buttons
     localPopupDiv.innerHTML =
-      `<div>There is a cache here at "${i},${j}". It has value <span id="value">${pointValue}</span>.</div>
+      `<div>There is a cache here at "${cellRefernce.i},${cellRefernce.j}". It has value <span id="value">${pointValue}</span>.</div>
                 <button id="poke">collect</button> Or <button id= "deposit">deposit</button>`;
 
     // Style the buttons
@@ -220,6 +229,14 @@ function spawnCache(i: number, j: number) {
       .querySelector<HTMLButtonElement>("#poke")!
       .addEventListener("click", () => {
         if (pointValue > 0) {
+          inventory.push(coins.pop()!);
+          console.log(
+            "Collected: ",
+            inventory[inventory.length - 1].i,
+            inventory[inventory.length - 1].j,
+            "#",
+            inventory[inventory.length - 1].serial,
+          );
           playerPoints += 1;
           pointValue -= 1;
           updateValueText();
@@ -229,7 +246,15 @@ function spawnCache(i: number, j: number) {
       });
     localPopupDiv.querySelector<HTMLButtonElement>("#deposit")!
       .addEventListener("click", () => {
-        if (playerPoints > 0) {
+        if (playerPoints > 0 && inventory.length > 0) {
+          coins.push(inventory.pop()!);
+          console.log(
+            "Deposited: ",
+            coins[coins.length - 1].i,
+            coins[coins.length - 1].j,
+            "#",
+            coins[coins.length - 1].serial,
+          );
           pointValue += 1;
           playerPoints -= 1;
           updateValueText();
@@ -245,9 +270,6 @@ function beginCacheGeneration() {
   const bounds = map.getBounds();
   const southWest = bounds.getSouthWest();
   const northEast = bounds.getNorthEast();
-  console.log(bounds);
-  console.log(southWest);
-  console.log(northEast);
 
   for (let lat = southWest.lat; lat <= northEast.lat; lat += TILE_DEGREES) {
     for (let lng = southWest.lng; lng <= northEast.lng; lng += TILE_DEGREES) {
