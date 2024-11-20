@@ -13,8 +13,6 @@ const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
 
 // Gameplay parameters
 const GAMEPLAY_ZOOM_LEVEL = 19;
-const MIN_ZOOM_LEVEL = 15;
-const MAX_ZOOM_LEVEL = 19;
 const NEIGHBORHOOD_SIZE = 16;
 const CACHE_SPAWN_PROBABILITY = 0.05;
 const TILE_DEGREES = 1e-4;
@@ -23,10 +21,8 @@ const TILE_DEGREES = 1e-4;
 const map = leaflet.map(document.getElementById("map")!, {
   center: OAKES_CLASSROOM,
   zoom: GAMEPLAY_ZOOM_LEVEL,
-  minZoom: MIN_ZOOM_LEVEL,
-  maxZoom: MAX_ZOOM_LEVEL,
-  zoomControl: true,
-  scrollWheelZoom: true,
+  zoomControl: false,
+  scrollWheelZoom: false,
 });
 
 interface Cell {
@@ -43,18 +39,22 @@ interface Coin {
 //Create an inventory for the player
 const inventory: Coin[] = [];
 
+function _printInventory() {
+  console.log("Inventory: ");
+  for (let i = 0; i < inventory.length; i++) {
+    console.log(inventory[i].i, inventory[i].j, "#", inventory[i].serial);
+  }
+}
+
 // Convert a lat/lng coordinate to a cell number
 function latLngToCell(latlng: leaflet.LatLng): Cell {
   return {
-    i: Math.round((latlng.lat) / TILE_DEGREES),
-    j: Math.round((latlng.lng) / TILE_DEGREES),
+    i: Math.round((latlng.lat) * 10000 / TILE_DEGREES),
+    j: Math.round((latlng.lng) * 10000 / TILE_DEGREES),
   };
 }
-function coordinatesToCell(lat: number, lng: number): Cell {
-  return {
-    i: Math.round(lat / TILE_DEGREES),
-    j: Math.round(lng / TILE_DEGREES),
-  };
+function createLatLng(i: number, j: number): leaflet.LatLng {
+  return leaflet.latLng(i * TILE_DEGREES, j * TILE_DEGREES);
 }
 
 export class Board {
@@ -62,6 +62,7 @@ export class Board {
   readonly tileVisibilityRadius: number;
 
   private knownCells: Map<string, Cell> = new Map();
+  private momentoMap: Map<Cell, string> = new Map();
 
   constructor(tileWidthConstr: number, tileVisibilityRadiusConstr: number) {
     this.tileWidth = tileWidthConstr;
@@ -79,13 +80,34 @@ export class Board {
     const key = [i, j].toString();
     //not sure if this is correct
     if (!this.knownCells.has(key)) {
-      this.addKnownCell(cell);
+      this.knownCells.set(key, cell);
     }
     return this.knownCells.get(key)!;
   }
 
+  setMomento(cell: Cell, momento: string) {
+    this.momentoMap.set(cell, momento);
+  }
+
+  getMomento(cell: Cell): string {
+    if (this.momentoMap.has(cell)) {
+      return this.momentoMap.get(cell)!;
+    } else return "";
+  }
+
   getCellForPoint(point: leaflet.LatLng): Cell {
-    return this.getCanonicalCell(latLngToCell(point));
+    if (this.doesCellExist(latLngToCell(point))) {
+      return this.getCanonicalCell(latLngToCell(point));
+    }
+    const tempCell = latLngToCell(point);
+    return tempCell;
+  }
+
+  doesCellExist(cell: Cell): boolean {
+    if (this.knownCells.has([cell.i, cell.j].toString())) {
+      return true;
+    }
+    return false;
   }
 
   getCellBounds(cell: Cell): leaflet.LatLngBounds {
@@ -101,34 +123,15 @@ export class Board {
       ],
     ]);
   }
-
-  getCellsNearPoint(point: leaflet.LatLng): Cell[] {
-    const resultCells: Cell[] = [];
-    const originCell = this.getCellForPoint(point);
-    //Prob Broken
-    for (
-      let i = -this.tileVisibilityRadius;
-      i <= this.tileVisibilityRadius;
-      i++
-    ) {
-      for (
-        let j = -this.tileVisibilityRadius;
-        j <= this.tileVisibilityRadius;
-        j++
-      ) {
-        const cell = { i: originCell.i + i, j: originCell.j + j };
-        const bounds = this.getCellBounds(cell);
-        if (map.getBounds().intersects(bounds)) {
-          resultCells.push(cell);
-        }
-      }
-    }
-    return resultCells;
+  getClosestCell(point: leaflet.LatLng): Cell {
+    const { i, j } = latLngToCell(point);
+    return this.getCanonicalCell({ i: Math.round(i), j: Math.round(j) });
   }
 }
 
 // Create a board object
 const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
+const rectangeList: leaflet.rectangle[] = [];
 
 interface Momento<T> {
   toMomento(): T;
@@ -136,22 +139,21 @@ interface Momento<T> {
 }
 
 class Geocache implements Momento<string> {
-  i: number;
-  j: number;
-  numCoins: number;
+  location: Cell;
+  numCoins: number = 0;
   localCoins: Coin[] = [];
-  constructor(I: number, J: number, numCoins: number) {
-    this.i = I;
-    this.j = J;
-    this.numCoins = numCoins;
+  constructor(cell: Cell) {
+    this.location = cell;
   }
   toMomento() {
-    return this.numCoins.toString();
+    return JSON.stringify(this.localCoins);
   }
 
   fromMomento(momento: string) {
-    this.numCoins = parseInt(momento);
+    this.localCoins = JSON.parse(momento) as Coin[];
+    this.numCoins = this.localCoins.length;
   }
+
   addCoin(Coin: Coin) {
     this.numCoins++;
     this.localCoins.push(Coin);
@@ -175,30 +177,43 @@ class Geocache implements Momento<string> {
 // Populate the map with a background tile layer
 leaflet
   .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: MAX_ZOOM_LEVEL,
+    maxZoom: GAMEPLAY_ZOOM_LEVEL,
     attribution:
       '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
 
 // Add a marker to represent the player
-const playerMarker = leaflet.marker(map.getCenter());
+const playerMarker = leaflet.marker(OAKES_CLASSROOM);
 playerMarker.bindTooltip("You");
 playerMarker.addTo(map);
+
+//Inventory Button
+const inventoryButton = document.getElementById("inventory");
+inventoryButton?.addEventListener("click", () => {
+  _printInventory();
+});
 
 //Navigation button function
 function createNavigationButton(element: string, offset: [number, number]) {
   const button = document.getElementById(element);
   if (button !== null) {
     button.addEventListener("click", () => {
-      map.panBy(offset);
+      let latLng = playerMarker.getLatLng();
+      latLng = {
+        lat: latLng.lat + (offset[1] * TILE_DEGREES),
+        lng: latLng.lng + (offset[0] * TILE_DEGREES),
+      };
+      playerMarker.setLatLng(latLng);
+      map.setView(playerMarker.getLatLng());
+      _regerateCache();
     });
   }
 }
 //Create navigation buttons
-createNavigationButton("north", [0, -50]);
-createNavigationButton("south", [0, 50]);
-createNavigationButton("west", [-50, 0]);
-createNavigationButton("east", [50, 0]);
+createNavigationButton("north", [0, 1]);
+createNavigationButton("south", [0, -1]);
+createNavigationButton("west", [-1, 0]);
+createNavigationButton("east", [1, 0]);
 
 // Display the player's points
 let playerPoints = 0;
@@ -209,29 +224,44 @@ function updatePlayerPoints() {
 }
 updatePlayerPoints();
 
+function updateGeocacheMomento(cache: Geocache) {
+  const cell = cache.location;
+  board.setMomento(cell, cache.toMomento());
+}
+
 function spawnCache(i: number, j: number) {
+  const geocacheCell = board.getCellForPoint(createLatLng(i, j));
+  const GeocacheObj = new Geocache(geocacheCell);
+
+  if (board.doesCellExist(geocacheCell)) {
+    GeocacheObj.fromMomento(board.getMomento(geocacheCell));
+  } else {
+    const pointValue = Math.floor(
+      luck([i, j, "initialValue"].toString()) * 100,
+    );
+    //For every point value we will create a coin object and add it to the cache
+    for (let k = 0; k < pointValue; k++) {
+      GeocacheObj.addCoin({
+        i: GeocacheObj.location.i,
+        j: GeocacheObj.location.j,
+        serial: k,
+      });
+    }
+    updateGeocacheMomento(GeocacheObj);
+    board.addKnownCell(geocacheCell);
+  }
+
   // Convert cell numbers into lat/lng bounds
   const bounds = leaflet.latLngBounds([
     [i, j],
     [i + 1 * TILE_DEGREES, j + 1 * TILE_DEGREES],
   ]);
 
-  board.addKnownCell(coordinatesToCell(i, j));
-  const cellRefernce: Cell = board.getCellForPoint(bounds.getCenter());
-
-  let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
-
-  const cache = new Geocache(cellRefernce.i, cellRefernce.j, pointValue);
-
-  //For every point value we will create a coin object and add it to the cache
-  for (let k = 0; k < pointValue; k++) {
-    cache.addCoin({ i: cellRefernce.i, j: cellRefernce.j, serial: k });
-  }
-
   // Add a rectangle to the map to represent the cache
   const rect = leaflet.rectangle(bounds);
   rect.setStyle({ color: "#ebff35", weight: 1 });
   rect.addTo(map);
+  rectangeList.push(rect);
 
   function updateRectWeight(number: number) {
     let weightMultiplier = 1;
@@ -242,14 +272,14 @@ function spawnCache(i: number, j: number) {
     }
     rect.setStyle({ color: "#ebff35", weight: weightMultiplier });
   }
-  updateRectWeight(pointValue);
+  updateRectWeight(GeocacheObj.numCoins);
 
   // Handle interactions with the cache
   rect.bindPopup(() => {
     const localPopupDiv = document.createElement("div");
     //Display text and create buttons
     localPopupDiv.innerHTML =
-      `<div>There is a cache here at "${cellRefernce.i},${cellRefernce.j}". It has value <span id="value">${pointValue}</span>.</div>
+      `<div>There is a cache here at "${geocacheCell.i},${geocacheCell.j}". It has value <span id="value">${GeocacheObj.numCoins}</span>.</div>
                 <button id="poke">collect</button> Or <button id= "deposit">deposit</button>`;
 
     // Style the buttons
@@ -262,7 +292,7 @@ function spawnCache(i: number, j: number) {
 
     function updateValueText() {
       localPopupDiv.querySelector<HTMLSpanElement>("#value")!.innerHTML =
-        pointValue.toString();
+        GeocacheObj.numCoins.toString();
     }
 
     // Button Event Listeners
@@ -270,8 +300,8 @@ function spawnCache(i: number, j: number) {
     localPopupDiv
       .querySelector<HTMLButtonElement>("#poke")!
       .addEventListener("click", () => {
-        if (pointValue > 0) {
-          inventory.push(cache.popCoin());
+        if (GeocacheObj.numCoins > 0) {
+          inventory.push(GeocacheObj.popCoin());
           console.log(
             "Collected: ",
             inventory[inventory.length - 1].i,
@@ -280,61 +310,60 @@ function spawnCache(i: number, j: number) {
             inventory[inventory.length - 1].serial,
           );
           playerPoints += 1;
-          pointValue -= 1;
           updateValueText();
           updatePlayerPoints();
-          updateRectWeight(pointValue);
+          updateRectWeight(GeocacheObj.numCoins);
+          updateGeocacheMomento(GeocacheObj);
         }
       });
     localPopupDiv.querySelector<HTMLButtonElement>("#deposit")!
       .addEventListener("click", () => {
         if (playerPoints > 0 && inventory.length > 0) {
-          cache.addCoin(inventory.pop()!);
+          GeocacheObj.addCoin(inventory.pop()!);
           console.log(
             "Deposited: ",
-            cache.getTopCoin().i,
-            cache.getTopCoin().j,
+            GeocacheObj.getTopCoin().i,
+            GeocacheObj.getTopCoin().j,
             "#",
-            cache.getTopCoin().serial,
+            GeocacheObj.getTopCoin().serial,
           );
-          pointValue += 1;
           playerPoints -= 1;
           updateValueText();
           updatePlayerPoints();
-          updateRectWeight(pointValue);
+          updateRectWeight(GeocacheObj.numCoins);
+          updateGeocacheMomento(GeocacheObj);
         }
       });
     return localPopupDiv;
   });
 }
 
-//Regenerate the cache so that it only displays caches that are within the screen
-//TODO: Add a check to see if the cache is already on the map
+//Delete all rectanges from the map
 function _regerateCache() {
-  const bounds = map.getBounds();
-  const southWest = bounds.getSouthWest();
-  const northEast = bounds.getNorthEast();
-
-  for (let lat = southWest.lat; lat <= northEast.lat; lat += TILE_DEGREES) {
-    for (let lng = southWest.lng; lng <= northEast.lng; lng += TILE_DEGREES) {
-      if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
-        spawnCache(lat, lng);
-      }
-    }
+  for (let i = 0; i < rectangeList.length; i++) {
+    rectangeList[i].remove();
   }
+  rectangeList.length = 0;
+  beginCacheGeneration();
 }
 
 function beginCacheGeneration() {
-  const bounds = map.getBounds();
-  const southWest = bounds.getSouthWest();
-  const northEast = bounds.getNorthEast();
+  const center = playerMarker.getLatLng();
 
-  for (let lat = southWest.lat; lat <= northEast.lat; lat += TILE_DEGREES) {
-    for (let lng = southWest.lng; lng <= northEast.lng; lng += TILE_DEGREES) {
-      if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
+  const southWestlat = center.lat - NEIGHBORHOOD_SIZE * TILE_DEGREES;
+  const southWestlng = center.lng - NEIGHBORHOOD_SIZE * TILE_DEGREES;
+  const northEastlat = center.lat + NEIGHBORHOOD_SIZE * TILE_DEGREES;
+  const northEastlng = center.lng + NEIGHBORHOOD_SIZE * TILE_DEGREES;
+
+  for (let lat = southWestlat; lat <= northEastlat; lat += TILE_DEGREES) {
+    for (let lng = southWestlng; lng <= northEastlng; lng += TILE_DEGREES) {
+      if (board.doesCellExist(latLngToCell({ lat, lng }))) {
+        spawnCache(lat, lng);
+      } else if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
         spawnCache(lat, lng);
       }
     }
   }
 }
+
 beginCacheGeneration();
