@@ -23,11 +23,21 @@ const map = leaflet.map(document.getElementById("map")!, {
   zoom: GAMEPLAY_ZOOM_LEVEL,
   zoomControl: false,
   scrollWheelZoom: false,
+  dragging: false,
 });
 
 interface Cell {
   readonly i: number;
   readonly j: number;
+}
+
+// Convert cells to keys and back, used for saving data.
+function fromCellToKey(cell: Cell): string {
+  return `${cell.i},${cell.j}`;
+}
+function fromKeyToCell(key: string): Cell {
+  const [i, j] = key.split(",").map(Number);
+  return { i, j };
 }
 
 interface Coin {
@@ -37,7 +47,7 @@ interface Coin {
 }
 
 //Create an inventory for the player
-const inventory: Coin[] = [];
+let inventory: Coin[] = [];
 
 function _printInventory() {
   console.log("Inventory: ");
@@ -53,6 +63,13 @@ function latLngToCell(latlng: leaflet.LatLng): Cell {
     j: Math.round((latlng.lng) * 10000 / TILE_DEGREES),
   };
 }
+function latLngToCellNoConversion(latlng: leaflet.LatLng): Cell {
+  return {
+    i: Math.round((latlng.lat) / TILE_DEGREES),
+    j: Math.round((latlng.lng) / TILE_DEGREES),
+  };
+}
+
 function createLatLng(i: number, j: number): leaflet.LatLng {
   return leaflet.latLng(i * TILE_DEGREES, j * TILE_DEGREES);
 }
@@ -61,8 +78,8 @@ export class Board {
   readonly tileWidth: number;
   readonly tileVisibilityRadius: number;
 
-  private knownCells: Map<string, Cell> = new Map();
-  private momentoMap: Map<Cell, string> = new Map();
+  knownCells: Map<string, Cell> = new Map();
+  momentoMap: Map<Cell, string> = new Map();
 
   constructor(tileWidthConstr: number, tileVisibilityRadiusConstr: number) {
     this.tileWidth = tileWidthConstr;
@@ -70,14 +87,12 @@ export class Board {
   }
 
   addKnownCell(cell: Cell) {
-    const { i, j } = cell;
-    const key = [i, j].toString();
+    const key = fromCellToKey(cell);
     this.knownCells.set(key, cell);
   }
 
   private getCanonicalCell(cell: Cell): Cell {
-    const { i, j } = cell;
-    const key = [i, j].toString();
+    const key = fromCellToKey(cell);
     //not sure if this is correct
     if (!this.knownCells.has(key)) {
       this.knownCells.set(key, cell);
@@ -103,29 +118,18 @@ export class Board {
     return tempCell;
   }
 
+  getCellForPointNoConversion(point: leaflet.LatLng): Cell {
+    const key = fromCellToKey(latLngToCellNoConversion(point));
+    if (this.knownCells.has(key)) {
+      return this.knownCells.get(key)!;
+    }
+    return latLngToCell(point);
+  }
   doesCellExist(cell: Cell): boolean {
-    if (this.knownCells.has([cell.i, cell.j].toString())) {
+    if (this.knownCells.has(fromCellToKey(cell))) {
       return true;
     }
     return false;
-  }
-
-  getCellBounds(cell: Cell): leaflet.LatLngBounds {
-    const { i, j } = cell;
-    return leaflet.latLngBounds([
-      [
-        OAKES_CLASSROOM.lat + i * this.tileWidth,
-        OAKES_CLASSROOM.lng + j * this.tileWidth,
-      ],
-      [
-        OAKES_CLASSROOM.lat + (i + 1) * this.tileWidth,
-        OAKES_CLASSROOM.lng + (j + 1) * this.tileWidth,
-      ],
-    ]);
-  }
-  getClosestCell(point: leaflet.LatLng): Cell {
-    const { i, j } = latLngToCell(point);
-    return this.getCanonicalCell({ i: Math.round(i), j: Math.round(j) });
   }
 }
 
@@ -150,8 +154,10 @@ class Geocache implements Momento<string> {
   }
 
   fromMomento(momento: string) {
-    this.localCoins = JSON.parse(momento) as Coin[];
-    this.numCoins = this.localCoins.length;
+    if (momento != "") {
+      this.localCoins = JSON.parse(momento) as Coin[];
+      this.numCoins = this.localCoins.length;
+    }
   }
 
   addCoin(Coin: Coin) {
@@ -193,6 +199,42 @@ inventoryButton?.addEventListener("click", () => {
   _printInventory();
 });
 
+//set to current location button
+const locationButton = document.getElementById("location");
+locationButton?.addEventListener("click", () => {
+  globalThis.navigator.geolocation.getCurrentPosition((position) => {
+    playerMarker.setLatLng([
+      position.coords.latitude,
+      position.coords.longitude,
+    ]);
+    map.setView(playerMarker.getLatLng());
+    _regerateCache();
+  });
+});
+
+const resetButton = document.getElementById("reset");
+resetButton?.addEventListener("click", () => {
+  if (
+    globalThis.confirm(
+      "Are you sure you want to reset your progress? This action cannot be undone.",
+    )
+  ) {
+    latlngs.length = 0;
+    localStorage.clear();
+    initializeDefaultSave();
+  }
+});
+
+//Polyline
+const latlngs: Cell[] = [];
+
+//Update the polyline
+function updatePolyLine() {
+  latlngs.push(playerMarker.getLatLng());
+  const polyline = leaflet.polyline(latlngs, { color: "blue" });
+  polyline.addTo(map);
+}
+
 //Navigation button function
 function createNavigationButton(element: string, offset: [number, number]) {
   const button = document.getElementById(element);
@@ -206,6 +248,7 @@ function createNavigationButton(element: string, offset: [number, number]) {
       playerMarker.setLatLng(latLng);
       map.setView(playerMarker.getLatLng());
       _regerateCache();
+      updatePolyLine();
     });
   }
 }
@@ -219,6 +262,7 @@ createNavigationButton("east", [1, 0]);
 let playerPoints = 0;
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 function updatePlayerPoints() {
+  playerPoints = inventory.length;
   if (playerPoints == 0) statusPanel.innerHTML = "No points...";
   else statusPanel.innerHTML = `${playerPoints} points accumulated`;
 }
@@ -347,6 +391,79 @@ function _regerateCache() {
   beginCacheGeneration();
 }
 
+interface SaveData {
+  inventoryData: Coin[];
+  knownCells: [string, string][]; //Second data is a cell
+  momentoMap: [string, string][]; //First data is a cell
+  playerPositionData: leaflet.LatLng;
+}
+
+function saveData() {
+  const localSaveData: SaveData = {
+    inventoryData: inventory,
+    knownCells: Array.from(board.knownCells.entries()).map((
+      [key, cell],
+    ) => [key, fromCellToKey(cell)]),
+    momentoMap: Array.from(board.momentoMap.entries()).map((
+      [cell, momento],
+    ) => [fromCellToKey(cell), momento]),
+    playerPositionData: playerMarker.getLatLng(),
+  };
+  localStorage.setItem("playerData", JSON.stringify(localSaveData));
+}
+
+function loadLocalSave() {
+  const loadData = localStorage.getItem("playerData");
+  if (loadData) {
+    try {
+      const data = JSON.parse(loadData) as SaveData;
+      // Safely apply the loaded data
+      inventory = data.inventoryData ?? [];
+      board.knownCells = new Map(
+        data.knownCells.map(([key, cell]) => [key, fromKeyToCell(cell)]),
+      );
+      data.momentoMap.map(([cell, momento]) => {
+        const key = board.knownCells.get(cell);
+        if (key != undefined) board.momentoMap.set(key, momento);
+      });
+      playerMarker.setLatLng(data.playerPositionData);
+      map.setView(playerMarker.getLatLng());
+      updatePolyLine();
+    } catch (err) {
+      console.error("Failed to parse save data:", err);
+      initializeDefaultSave();
+    }
+  } else {
+    initializeDefaultSave();
+  }
+  updatePlayerPoints();
+}
+
+function initializeDefaultSave() {
+  // Provide default, fallback values here
+  const data: SaveData = {
+    inventoryData: [],
+    playerPositionData: OAKES_CLASSROOM,
+    knownCells: [],
+    momentoMap: [],
+  };
+  inventory = data.inventoryData;
+  board.knownCells = new Map();
+  board.momentoMap = new Map();
+  playerMarker.setLatLng(data.playerPositionData);
+  updatePolyLine();
+  map.setView(playerMarker.getLatLng());
+  _regerateCache();
+  updatePlayerPoints();
+}
+
+function saveEveryTick() {
+  saveData();
+  requestAnimationFrame(saveEveryTick);
+}
+loadLocalSave();
+saveEveryTick();
+
 function beginCacheGeneration() {
   const center = playerMarker.getLatLng();
 
@@ -354,7 +471,6 @@ function beginCacheGeneration() {
   const southWestlng = center.lng - NEIGHBORHOOD_SIZE * TILE_DEGREES;
   const northEastlat = center.lat + NEIGHBORHOOD_SIZE * TILE_DEGREES;
   const northEastlng = center.lng + NEIGHBORHOOD_SIZE * TILE_DEGREES;
-
   for (let lat = southWestlat; lat <= northEastlat; lat += TILE_DEGREES) {
     for (let lng = southWestlng; lng <= northEastlng; lng += TILE_DEGREES) {
       if (board.doesCellExist(latLngToCell({ lat, lng }))) {
@@ -365,5 +481,4 @@ function beginCacheGeneration() {
     }
   }
 }
-
 beginCacheGeneration();
