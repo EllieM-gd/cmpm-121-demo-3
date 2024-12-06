@@ -1,6 +1,6 @@
 import leaflet from "leaflet";
 
-const TILE_DEGREES = 1e-4;
+import { GAME_CONFIG } from "./config.ts";
 
 export interface Cell {
   readonly i: number;
@@ -19,13 +19,13 @@ export function fromKeyToCell(key: string): Cell {
 // Convert a lat/lng coordinate to a cell number
 export function latLngToCell(latlng: leaflet.LatLng): Cell {
   return {
-    i: Math.round((latlng.lat) * 10000 / TILE_DEGREES),
-    j: Math.round((latlng.lng) * 10000 / TILE_DEGREES),
+    i: Math.round((latlng.lat) * 10000 / GAME_CONFIG.cacheTileDegrees),
+    j: Math.round((latlng.lng) * 10000 / GAME_CONFIG.cacheTileDegrees),
   };
 }
 export function latLngToCellNoConversion(latlng: leaflet.LatLng): Cell {
   return {
-    i: Math.round((latlng.lat) / TILE_DEGREES),
-    j: Math.round((latlng.lng) / TILE_DEGREES),
+    i: Math.round((latlng.lat) / GAME_CONFIG.cacheTileDegrees),
+    j: Math.round((latlng.lng) / GAME_CONFIG.cacheTileDegrees),
   };
 }

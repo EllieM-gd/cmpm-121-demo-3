@@ -16,14 +16,10 @@ import { createLatLng, initializeMap } from "./MapController.ts";
 // Location of our classroom (as identified on Google Maps)
 const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
 
-// Gameplay parameters
-const GAMEPLAY_ZOOM_LEVEL = 19;
-const NEIGHBORHOOD_SIZE = 16;
-const CACHE_SPAWN_PROBABILITY = 0.05;
-const TILE_DEGREES = 1e-4;
+import { GAME_CONFIG } from "./config.ts";
 
 // Create the map
-const map = initializeMap("map", OAKES_CLASSROOM, GAMEPLAY_ZOOM_LEVEL);
+const map = initializeMap("map", OAKES_CLASSROOM);
 
 export interface Coin {
   readonly i: number;
@@ -42,13 +38,16 @@ function _printInventory() {
 }
 
 // Create a board object
-const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
+const board = new Board(
+  GAME_CONFIG.cacheTileDegrees,
+  GAME_CONFIG.neighborhoodSize,
+);
 const rectangeList: leaflet.rectangle[] = [];
 
 // Populate the map with a background tile layer
 leaflet
   .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: GAMEPLAY_ZOOM_LEVEL,
+    maxZoom: GAME_CONFIG.zoomLevel,
     attribution:
       '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
@@ -106,8 +105,8 @@ function createNavigationButton(element: string, offset: [number, number]) {
     button.addEventListener("click", () => {
       let latLng = playerMarker.getLatLng();
       latLng = {
-        lat: latLng.lat + (offset[1] * TILE_DEGREES),
-        lng: latLng.lng + (offset[0] * TILE_DEGREES),
+        lat: latLng.lat + (offset[1] * GAME_CONFIG.cacheTileDegrees),
+        lng: latLng.lng + (offset[0] * GAME_CONFIG.cacheTileDegrees),
       };
       playerMarker.setLatLng(latLng);
       map.setView(playerMarker.getLatLng());
@@ -162,7 +161,10 @@ function spawnCache(i: number, j: number) {
   // Convert cell numbers into lat/lng bounds
   const bounds = leaflet.latLngBounds([
     [i, j],
-    [i + 1 * TILE_DEGREES, j + 1 * TILE_DEGREES],
+    [
+      i + 1 * GAME_CONFIG.cacheTileDegrees,
+      j + 1 * GAME_CONFIG.cacheTileDegrees,
+    ],
   ]);
 
   // Add a rectangle to the map to represent the cache
@@ -331,15 +333,27 @@ saveEveryTick();
 function beginCacheGeneration() {
   const center = playerMarker.getLatLng();
 
-  const southWestlat = center.lat - NEIGHBORHOOD_SIZE * TILE_DEGREES;
-  const southWestlng = center.lng - NEIGHBORHOOD_SIZE * TILE_DEGREES;
-  const northEastlat = center.lat + NEIGHBORHOOD_SIZE * TILE_DEGREES;
-  const northEastlng = center.lng + NEIGHBORHOOD_SIZE * TILE_DEGREES;
-  for (let lat = southWestlat; lat <= northEastlat; lat += TILE_DEGREES) {
-    for (let lng = southWestlng; lng <= northEastlng; lng += TILE_DEGREES) {
+  const southWestlat = center.lat -
+    GAME_CONFIG.neighborhoodSize * GAME_CONFIG.cacheTileDegrees;
+  const southWestlng = center.lng -
+    GAME_CONFIG.neighborhoodSize * GAME_CONFIG.cacheTileDegrees;
+  const northEastlat = center.lat +
+    GAME_CONFIG.neighborhoodSize * GAME_CONFIG.cacheTileDegrees;
+  const northEastlng = center.lng +
+    GAME_CONFIG.neighborhoodSize * GAME_CONFIG.cacheTileDegrees;
+  for (
+    let lat = southWestlat;
+    lat <= northEastlat;
+    lat += GAME_CONFIG.cacheTileDegrees
+  ) {
+    for (
+      let lng = southWestlng;
+      lng <= northEastlng;
+      lng += GAME_CONFIG.cacheTileDegrees
+    ) {
       if (board.doesCellExist(latLngToCell({ lat, lng }))) {
         spawnCache(lat, lng);
-      } else if (luck([lat, lng].toString()) < CACHE_SPAWN_PROBABILITY) {
+      } else if (luck([lat, lng].toString()) < GAME_CONFIG.spawnProbability) {
         spawnCache(lat, lng);
       }
     }
