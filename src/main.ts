@@ -7,6 +7,11 @@ import "./style.css";
 // Fix missing marker images
 import "./leafletWorkaround.ts";
 import luck from "./luck.ts";
+import { Cell } from "./Cell.ts";
+import { fromCellToKey, fromKeyToCell, latLngToCell } from "./Cell.ts";
+import { Board } from "./Board.ts";
+import { Geocache } from "./Geocache.ts";
+import { createLatLng, initializeMap } from "./MapController.ts";
 
 // Location of our classroom (as identified on Google Maps)
 const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
@@ -18,29 +23,9 @@ const CACHE_SPAWN_PROBABILITY = 0.05;
 const TILE_DEGREES = 1e-4;
 
 // Create the map
-const map = leaflet.map(document.getElementById("map")!, {
-  center: OAKES_CLASSROOM,
-  zoom: GAMEPLAY_ZOOM_LEVEL,
-  zoomControl: false,
-  scrollWheelZoom: false,
-  dragging: false,
-});
+const map = initializeMap("map", OAKES_CLASSROOM, GAMEPLAY_ZOOM_LEVEL);
 
-interface Cell {
-  readonly i: number;
-  readonly j: number;
-}
-
-// Convert cells to keys and back, used for saving data.
-function fromCellToKey(cell: Cell): string {
-  return `${cell.i},${cell.j}`;
-}
-function fromKeyToCell(key: string): Cell {
-  const [i, j] = key.split(",").map(Number);
-  return { i, j };
-}
-
-interface Coin {
+export interface Coin {
   readonly i: number;
   readonly j: number;
   serial: number;
@@ -56,129 +41,9 @@ function _printInventory() {
   }
 }
 
-// Convert a lat/lng coordinate to a cell number
-function latLngToCell(latlng: leaflet.LatLng): Cell {
-  return {
-    i: Math.round((latlng.lat) * 10000 / TILE_DEGREES),
-    j: Math.round((latlng.lng) * 10000 / TILE_DEGREES),
-  };
-}
-function latLngToCellNoConversion(latlng: leaflet.LatLng): Cell {
-  return {
-    i: Math.round((latlng.lat) / TILE_DEGREES),
-    j: Math.round((latlng.lng) / TILE_DEGREES),
-  };
-}
-
-function createLatLng(i: number, j: number): leaflet.LatLng {
-  return leaflet.latLng(i * TILE_DEGREES, j * TILE_DEGREES);
-}
-
-export class Board {
-  readonly tileWidth: number;
-  readonly tileVisibilityRadius: number;
-
-  knownCells: Map<string, Cell> = new Map();
-  momentoMap: Map<Cell, string> = new Map();
-
-  constructor(tileWidthConstr: number, tileVisibilityRadiusConstr: number) {
-    this.tileWidth = tileWidthConstr;
-    this.tileVisibilityRadius = tileVisibilityRadiusConstr;
-  }
-
-  addKnownCell(cell: Cell) {
-    const key = fromCellToKey(cell);
-    this.knownCells.set(key, cell);
-  }
-
-  private getCanonicalCell(cell: Cell): Cell {
-    const key = fromCellToKey(cell);
-    //not sure if this is correct
-    if (!this.knownCells.has(key)) {
-      this.knownCells.set(key, cell);
-    }
-    return this.knownCells.get(key)!;
-  }
-
-  setMomento(cell: Cell, momento: string) {
-    this.momentoMap.set(cell, momento);
-  }
-
-  getMomento(cell: Cell): string {
-    if (this.momentoMap.has(cell)) {
-      return this.momentoMap.get(cell)!;
-    } else return "";
-  }
-
-  getCellForPoint(point: leaflet.LatLng): Cell {
-    if (this.doesCellExist(latLngToCell(point))) {
-      return this.getCanonicalCell(latLngToCell(point));
-    }
-    const tempCell = latLngToCell(point);
-    return tempCell;
-  }
-
-  getCellForPointNoConversion(point: leaflet.LatLng): Cell {
-    const key = fromCellToKey(latLngToCellNoConversion(point));
-    if (this.knownCells.has(key)) {
-      return this.knownCells.get(key)!;
-    }
-    return latLngToCell(point);
-  }
-  doesCellExist(cell: Cell): boolean {
-    if (this.knownCells.has(fromCellToKey(cell))) {
-      return true;
-    }
-    return false;
-  }
-}
-
 // Create a board object
 const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
 const rectangeList: leaflet.rectangle[] = [];
-
-interface Momento<T> {
-  toMomento(): T;
-  fromMomento(momento: T): void;
-}
-
-class Geocache implements Momento<string> {
-  location: Cell;
-  numCoins: number = 0;
-  localCoins: Coin[] = [];
-  constructor(cell: Cell) {
-    this.location = cell;
-  }
-  toMomento() {
-    return JSON.stringify(this.localCoins);
-  }
-
-  fromMomento(momento: string) {
-    if (momento != "") {
-      this.localCoins = JSON.parse(momento) as Coin[];
-      this.numCoins = this.localCoins.length;
-    }
-  }
-
-  addCoin(Coin: Coin) {
-    this.numCoins++;
-    this.localCoins.push(Coin);
-  }
-  popCoin(): Coin {
-    if (this.localCoins.length > 0) {
-      this.numCoins--;
-      return this.localCoins.pop()!;
-    }
-    throw new Error("No coins left to pop");
-  }
-  //Used for testing mostly
-  getTopCoin(): Coin {
-    if (this.localCoins.length > 0) {
-      return this.localCoins[this.localCoins.length - 1];
-    }
-    throw new Error("No coins left to pop");
-  }
-}
 
 // Populate the map with a background tile layer
 leaflet
@@ -195,9 +60,7 @@ playerMarker.addTo(map);
 
 //Inventory Button
 const inventoryButton = document.getElementById("inventory");
-inventoryButton?.addEventListener("click", () => {
-  _printInventory();
-});
+inventoryButton?.addEventListener("click", _printInventory);
 
 //set to current location button
 const locationButton = document.getElementById("location");
@@ -212,8 +75,7 @@ locationButton?.addEventListener("click", () => {
   });
 });
 
-const resetButton = document.getElementById("reset");
-resetButton?.addEventListener("click", () => {
+function resetButtonFunction() {
   if (
     globalThis.confirm(
       "Are you sure you want to reset your progress? This action cannot be undone.",
@@ -223,7 +85,9 @@ resetButton?.addEventListener("click", () => {
     localStorage.clear();
     initializeDefaultSave();
   }
-});
+}
+const resetButton = document.getElementById("reset");
+resetButton?.addEventListener("click", resetButtonFunction);
 
 //Polyline
 const latlngs: Cell[] = [];
